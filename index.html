@@ -9,7 +9,6 @@
     <script type="importmap">
       {
         "imports": {
-          "oimo": "https://unpkg.com/oimo@1.0.9/build/oimo.module.js",
           "three": "https://unpkg.com/three@0.150.1/build/three.module.js",
           "three/addons/": "https://unpkg.com/three@0.150.1/examples/jsm/"
         }
@@ -19,7 +18,6 @@
 <body>
     <script type="module">
         import * as THREE from 'three';
-        import * as OIMO from 'oimo';
         //import { DragControls } from 'three/addons/controls/DragControls.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         const debug = true;
@@ -38,10 +36,10 @@
         const setupWorld = () => {
             const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration()
             const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration)
-            const overlappingPairCache = new Ammo.btDbvtBroadphase()
+            const broadphase = new Ammo.btDbvtBroadphase()
             const solver = new Ammo.btSequentialImpulseConstraintSolver()
 
-            const world = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+            const world = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration);
             world.setGravity(new Ammo.btVector3(0, -10, 0));
 
             return world
@@ -263,19 +261,21 @@
             const transform = new Ammo.btTransform();
             transform.setIdentity();
             transform.setOrigin(new Ammo.btVector3( ...position ));
-            transform.setRotation( new Ammo.btQuaternion( 0,0,0,1));
+            transform.setRotation( new Ammo.btQuaternion( 0, 0, 0, 1));
             const motionState = new Ammo.btDefaultMotionState( transform );
 
             const colShape = new Ammo.btBoxShape( new Ammo.btVector3( ...size.map(v => v* 0.5) ) );
-            colShape.setMargin( 0.05 ); // ?
+            colShape.setMargin( 0.2 ); // ?
             const localInertia = new Ammo.btVector3( 0, 0, 0 );
-            colShape.calculateLocalInertia( 0, localInertia );
+            colShape.calculateLocalInertia( 1, localInertia );
 
-            const rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
             const body = new Ammo.btRigidBody( rbInfo );
             body.setActivationState( 4 );
 
             world.addRigidBody(body)
+
+            console.log(body)
 
             return body
         }
