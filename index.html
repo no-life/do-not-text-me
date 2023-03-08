@@ -5,6 +5,7 @@
     <title>?</title>
     <link rel="stylesheet" href="style.css" />
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script src="https://unpkg.com/ammojs3@0.0.6/builds/ammo.js"></script>
     <script type="importmap">
       {
         "imports": {
@@ -21,39 +22,302 @@
         import * as OIMO from 'oimo';
         //import { DragControls } from 'three/addons/controls/DragControls.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
         const debug = true;
 
-        const scene = new THREE.Scene();
-        const pointer = new THREE.Vector2();
-        const plane = new THREE.Plane();
-        const offset = new THREE.Vector3();
-        const intersection = new THREE.Vector3();
-        const raycaster = new THREE.Raycaster();
-        let dragee = null;
+        Ammo().then(() => {
+            const world = setupWorld()
+            const [scene, loop] = setupScene()
+            setupLight(scene)
 
-        const scale = 1
+            const picker = setupStatic(scene, world)
+            const canvas = getCardCanvas()
+            const callback = setupEvents(scene, picker, pickerCallback(scene, world, canvas))
+            loop(world, [callback])
+        })
 
-        scene.background = new THREE.Color(0x282c34);
-        const camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 1, 1000);
-        camera.position.set( 0, 30 * scale, 0 );
-        camera.lookAt(0, 0, 0);
+        const setupWorld = () => {
+            const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration()
+            const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration)
+            const overlappingPairCache = new Ammo.btDbvtBroadphase()
+            const solver = new Ammo.btSequentialImpulseConstraintSolver()
 
-        const renderer = new THREE.WebGLRenderer();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.querySelector('body').appendChild(renderer.domElement);
+            const world = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
+            world.setGravity(new Ammo.btVector3(0, -10, 0));
 
-        // const controls = new OrbitControls( camera, renderer.domElement );
-        // controls.target.set(0, 0, 0);
-        // controls.update();
+            return world
+        }
 
-        let gui_idx = 0
+        const setupScene = () => {
+            const clock = new THREE.Clock();
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x282c34);
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
+            camera.position.set(0, 30, 0);
+            camera.lookAt(0, 0, 0);
+
+            const renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.querySelector('body').appendChild(renderer.domElement);
+
+            // const controls = new OrbitControls( camera, renderer.domElement );
+            // controls.target.set(0, 0, 0);
+            // controls.update();
+
+            function update(world, delta) {
+                world.stepSimulation( delta, 10 );
+
+                for (const child of scene.children) {
+                    if (child.body) {
+                        const transform = child.body.getWorldTransform()
+                        const position = transform.getOrigin()
+                        const rotation = transform.getRotation()
+                        child.position.set(position.x(), position.y(), position.z())
+                        child.quaternion.set(rotation.x(), rotation.y(), rotation.z(), rotation.w());
+                    }
+                }
+            }
+            const loop = (world, callbacks) => {
+                const delta = clock.getDelta();
+                callbacks.map(c => c())
+                update(world, delta);
+                renderer.render(scene, camera);
+                requestAnimationFrame(() => loop(world, callbacks));
+            }
+
+            scene.camera = camera
+
+            return [scene, loop]
+        }
+
+        const setupLight = (scene) => {
+            function light(position, target, color) {
+                const intensity = 1;
+                const light = new THREE.SpotLight(color, intensity);
+                light.position.set(...position)
+                light.target.position.set(...target)
+                scene.add(light);
+                scene.add(light.target);
+
+                return light
+            }
+
+            function ambient_light(color) {
+                const intensity = 1;
+                const light = new THREE.AmbientLight(color, intensity);
+                scene.add(light);
+
+                return light
+            }
+
+            function show_light(light) {
+                if (light.line) {
+                    scene.remove(light.line)
+                }
+
+                if (debug) {
+                    const material = new THREE.LineBasicMaterial( { color: light.color } );
+                    const points = [];
+                    points.push(light.position );
+                    points.push(light.target.position);
+
+                    const geometry = new THREE.BufferGeometry().setFromPoints( points );
+                    const line = new THREE.Line( geometry, material );
+                    scene.add(line)
+                    light.line = line
+                }
+            }
+
+            const light_left = light([5, 20, -10], [0,0,0], "#db00ff")
+            const light_right = light([-5, 20, -10], [0,0,0], "#a3ff22")
+            ambient_light("#00cdff")
+
+            function lgui(name, min, max, value, callback) {
+                const _callback = (v) => {callback(v), show_light(light_left); show_light(light_right)}
+                gui(name, min, max, value, _callback)
+            }
+
+            lgui('light_x', -50, 50, 32, (v)=>{light_left.position.x = v;light_right.position.x = -v;})
+            lgui('light_z', -200, 50, -75, (v)=>{light_left.position.z = v;light_right.position.z = v;})
+            lgui('light_y', 0, 100, 50, (v)=>{light_left.position.y = v;light_right.position.y = v;})
+            lgui('light_t_x', -50, 50, 2, (v)=>{light_left.target.position.x = v;light_right.target.position.x = -v;})
+            lgui('light_t_z', -200, 50, 0, (v)=>{light_left.target.position.z = v;light_right.target.position.z = v;})
+            lgui('light_t_y', -50, 50, 5, (v)=>{light_left.target.position.y = v;light_right.target.position.y = v;})
+            gui('light_angle', 0, 1, 0.09, (v)=>{light_left.angle = v;light_right.angle = v;})
+            gui('light_penumbra', 0, 1, 1, (v)=>{light_left.penumbra = v;light_right.penumbra = v;})
+            gui('light_intensity', 0, 10, 1.6, (v)=>{light_left.intensity = v;light_right.intensity = v;})
+        }
+
+        const setupStatic = (scene, world) => {
+            function addStaticBox(size, phys_size, position, rotation, color=0xFF0000) {
+                const body = getBoxBody(world, position, size, 0)
+
+                // Graphics
+                const mat = new THREE.MeshStandardMaterial({
+                  color: color, metalness: 0.6, roughness: 0.4
+                });
+                const geo = new THREE.BoxGeometry(...size)
+                const mesh = new THREE.Mesh(geo, mat);
+
+                mesh.body = body
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add( mesh );
+                return mesh
+            }
+
+            const ground = addStaticBox([20, 10, 20],[21, 11, 21], [0,0,0], [0, 0, 0], "#ffffff");
+            const picker = addStaticBox([9, 0.5, 5], [9, 0.5, 5], [10,10,0], [0,0,0], 0x282323);
+
+            gui('metalness', 0, 1, 0.6, (v)=>{ground.material.metalness = v})
+            gui('toughness', 0, 1, 0.4, (v)=>{ground.material.roughness = v})
+
+            return picker
+        }
+
+        const setupEvents = (scene, picker, callback) => {
+            const pointer = new THREE.Vector2();
+            const plane = new THREE.Plane();
+            const offset = new THREE.Vector3();
+            const intersection = new THREE.Vector3();
+            const raycaster = new THREE.Raycaster();
+            let dragee = null;
+
+            function onMouseDown() {
+                const intersects = raycaster.intersectObjects(scene.children);
+                if (!intersects.length) return;
+                dragee = intersects[0].object;
+                let from_ground = true
+                if (dragee === picker) {
+                    dragee = callback()
+                    from_ground = false
+                }
+                if (dragee.body) {
+                    if (from_ground){
+                        dragee.position.add(raycaster.ray.direction.clone().multiplyScalar(-5));
+                    }
+                    plane.setFromNormalAndCoplanarPoint(scene.camera.getWorldDirection(plane.normal), dragee.position);
+                    if (raycaster.ray.intersectPlane(plane, intersection)) {
+                        offset.copy(intersection).sub(dragee.position);
+                    }
+                }
+            }
+
+            function onMouseUp () {
+                if (dragee && dragee.body) {
+                    //dragee.body.linearVelocity.multiplyScalar(0.25)
+                }
+                dragee = null;
+            }
+
+            function onPointerMove( event ) {
+                pointer.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+                pointer.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+                raycaster.setFromCamera( pointer, scene.camera );
+
+                // calculate pointer position in normalized device coordinates
+                // (-1 to +1) for both components
+            }
+
+            window.addEventListener('mousedown', onMouseDown);
+            window.addEventListener('mouseup', onMouseUp);
+            window.addEventListener('pointermove', onPointerMove);
+
+            return () => {
+                if (dragee && dragee.body) {
+                    raycaster.ray.intersectPlane(plane, intersection)
+                    const force = [...intersection.sub(offset).sub(dragee.position).multiplyScalar(10)]
+                    console.log(dragee)
+                    dragee.body.setLinearVelocity(new Ammo.btVector3(...force))
+                }
+            }
+        }
+
+        const getCardCanvas = () => {
+            const ctx = document.createElement('canvas').getContext('2d');
+
+            ctx.canvas.width = 900;
+            ctx.canvas.height = 500;
+            ctx.fillStyle = '#b4b4b4';
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = "90px arial";
+            ctx.fillText("Artyom G.", 270, 230);
+            ctx.font = "60px arial";
+            ctx.fillText("don't text me", 280, 310);
+            ctx.beginPath()
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = ctx.fillStyle;
+            ctx.moveTo(50, 250)
+            ctx.lineTo(ctx.canvas.width - 50, 250)
+            ctx.stroke();
+
+            //document.body.appendChild(ctx.canvas);
+            ctx.canvas.style.position = 'absolute';
+            ctx.canvas.style.top = 0;
+            ctx.canvas.style.zIndex = 100;
+
+            return ctx
+        }
+
+        const getBoxBody = (world, position, size, mass) => {
+            const transform = new Ammo.btTransform();
+            transform.setIdentity();
+            transform.setOrigin(new Ammo.btVector3( ...position ));
+            transform.setRotation( new Ammo.btQuaternion( 0,0,0,1));
+            const motionState = new Ammo.btDefaultMotionState( transform );
+
+            const colShape = new Ammo.btBoxShape( new Ammo.btVector3( ...size.map(v => v* 0.5) ) );
+            colShape.setMargin( 0.05 ); // ?
+            const localInertia = new Ammo.btVector3( 0, 0, 0 );
+            colShape.calculateLocalInertia( 0, localInertia );
+
+            const rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, colShape, localInertia );
+            const body = new Ammo.btRigidBody( rbInfo );
+            body.setActivationState( 4 );
+
+            world.addRigidBody(body)
+
+            return body
+        }
+
+        const pickerCallback = (scene, world, canvas) => {
+            // Graphics
+            const texture = new THREE.CanvasTexture(canvas.canvas);
+            const mat = new THREE.MeshStandardMaterial({
+                  map: texture, metalness: 0.6, roughness: 0.4
+            });
+            gui('card metalness', 0, 1, 0.6, (v)=>{mat.metalness = v})
+            gui('card toughness', 0, 1, 0.4, (v)=>{mat.roughness = v})
+
+            return () => {
+                const position = [10, 11, 0]
+                const size = [9, 0.1, 5]
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry( ...size), mat);
+                mesh.position.set(...position)
+                // Physics
+                const body = getBoxBody(
+                    world, position, size, 1
+                )
+
+                mesh.body = body
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+                return mesh
+            }
+        }
+
         function gui(name, min, max, value, callback) {
+                if ( typeof gui.counter == 'undefined' ) {
+                // It has not... perform the initialization
+                gui.counter = 0;
+            }
+
             const input = document.createElement('input');
             document.body.appendChild(input);
             input.type = 'range'
             input.style.position = 'absolute';
-            input.style.top = gui_idx * 25 + 'px';
+            input.style.top = gui.counter * 25 + 'px';
             input.style.left = 50 + 'px';
             input.style.width = '150px'
             input.min = min
@@ -63,14 +327,14 @@
             const label_n = document.createElement('label');
             document.body.appendChild(label_n);
             label_n.style.position = 'absolute';
-            label_n.style.top = gui_idx * 25 + 'px';
+            label_n.style.top = gui.counter * 25 + 'px';
             label_n.style.left = '210px';
             label_n.style.color = '#FFF'
             label_n.innerHTML = name
             const label_v = document.createElement('label');
             document.body.appendChild(label_v);
             label_v.style.position = 'absolute';
-            label_v.style.top = gui_idx * 25 + 'px';
+            label_v.style.top = gui.counter * 25 + 'px';
             label_v.style.left = 0;
             label_v.style.color = '#FFF'
             label_v.style.width = '50px'
@@ -82,220 +346,11 @@
             }
             input.oninput()
 
-            gui_idx++;
-        }
-
-        function light(position, target, color) {
-            const intensity = 1;
-            const light = new THREE.SpotLight(color, intensity);
-            light.position.set(...position)
-            light.target.position.set(...target)
-            scene.add(light);
-            scene.add(light.target);
-
-            return light
-        }
-
-        function ambient_light(color) {
-            const intensity = 1;
-            const light = new THREE.AmbientLight(color, intensity);
-            scene.add(light);
-
-            return light
-        };
-
-        function show_light(light) {
-            if (light.line) {
-                scene.remove(light.line)
-            }
-
-            if (debug) {
-                const material = new THREE.LineBasicMaterial( { color: light.color } );
-                const points = [];
-                points.push(light.position );
-                points.push(light.target.position);
-
-                const geometry = new THREE.BufferGeometry().setFromPoints( points );
-                const line = new THREE.Line( geometry, material );
-                scene.add(line)
-                light.line = line
-            }
-        }
-
-        const light_left = light([5, 20, -10], [0,0,0], "#db00ff")
-        const light_right = light([-5, 20, -10], [0,0,0], "#a3ff22")
-        ambient_light("#00cdff")
-
-        function lgui(name, min, max, value, callback) {
-            const _callback = (v) => {callback(v), show_light(light_left); show_light(light_right)}
-            gui(name, min, max, value, _callback)
-        }
-
-        lgui('light_x', -50, 50, 32, (v)=>{light_left.position.x = v;light_right.position.x = -v;})
-        lgui('light_z', -200, 50, -75, (v)=>{light_left.position.z = v;light_right.position.z = v;})
-        lgui('light_y', 0, 100, 50, (v)=>{light_left.position.y = v;light_right.position.y = v;})
-        lgui('light_t_x', -50, 50, 2, (v)=>{light_left.target.position.x = v;light_right.target.position.x = -v;})
-        lgui('light_t_z', -200, 50, 0, (v)=>{light_left.target.position.z = v;light_right.target.position.z = v;})
-        lgui('light_t_y', -50, 50, 5, (v)=>{light_left.target.position.y = v;light_right.target.position.y = v;})
-        gui('light_angle', 0, 1, 0.09, (v)=>{light_left.angle = v;light_right.angle = v;})
-        gui('light_penumbra', 0, 1, 1, (v)=>{light_left.penumbra = v;light_right.penumbra = v;})
-        gui('light_intensity', 0, 10, 1.6, (v)=>{light_left.intensity = v;light_right.intensity = v;})
-
-        const world = new OIMO.World({
-            info: true,
-            worldscale:1,
-            timestep: 1/30,
-            iterations: 10,
-            gravity: [0,-98 * scale,0],
-        });
-        const phys_params = {
-            density: 1000,
-            friction: 0.2,
-            restitution: 0.25,
-            world: world,
-        }
-
-        function addStaticBox(size, phys_size, position, rotation, color=0xFF0000) {
-            size = size.map((v) => v*scale)
-            position = position.map((v) => v*scale)
-            const body = world.add({
-                size:phys_size,
-                pos:position,
-                rot: rotation,
-                ...phys_params
-            });
-            const mat = new THREE.MeshStandardMaterial({
-              color: color, metalness: 0.6, roughness: 0.4
-            });
-            const geo = new THREE.BoxGeometry(...size)
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.body = body
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            mesh.position.copy(body.getPosition());
-            mesh.quaternion.copy(body.getQuaternion());
-            scene.add( mesh );
-            return mesh
-        }
-        const ground = addStaticBox([20, 10, 20],[21, 11, 21], [0,0,0], [0,0,0], "#ffffff");
-        const picker = addStaticBox([9, 0.5, 5], [9, 0.5, 5], [10,10,0], [0,0,0], 0x282323);
-
-        gui('metalness', 0, 1, 0.6, (v)=>{ground.material.metalness = v})
-        gui('toughness', 0, 1, 0.4, (v)=>{ground.material.roughness = v})
-
-        const bodies = [];
-        const meshes = [];
-
-        function update() {
-            world.step();
-
-            if (dragee && dragee.body) {
-                raycaster.ray.intersectPlane(plane, intersection)
-                const force = intersection.sub(offset).sub(dragee.body.position).multiplyScalar(10);
-                dragee.body.linearVelocity.copy(force)
-            }
-
-            let i = bodies.length;
-            while(i--) {
-                meshes[i].position.copy(bodies[i].getPosition());
-                meshes[i].quaternion.copy(bodies[i].getQuaternion());
-            }
-        }
-
-        function loop() {
-            update();
-            renderer.render( scene, camera );
-            requestAnimationFrame( loop );
+            gui.counter++;
         }
 
 
-        const ctx = document.createElement('canvas').getContext('2d');
 
-        ctx.canvas.width = 900;
-        ctx.canvas.height = 500;
-        ctx.fillStyle = '#b4b4b4';
-        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = "90px arial";
-        ctx.fillText("Artyom G.", 270, 230);
-        ctx.font = "60px arial";
-        ctx.fillText("don't text me", 280, 310);
-        ctx.beginPath()
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = ctx.fillStyle;
-        ctx.moveTo(50, 250)
-        ctx.lineTo(ctx.canvas.width - 50, 250)
-        ctx.stroke();
-
-        //document.body.appendChild(ctx.canvas);
-        ctx.canvas.style.position = 'absolute';
-        ctx.canvas.style.top = 0;
-        ctx.canvas.style.zIndex = 100;
-
-        const texture = new THREE.CanvasTexture(ctx.canvas);
-        const mat = new THREE.MeshStandardMaterial({
-              map: texture, metalness: 0.6, roughness: 0.4
-        });
-        gui('card metalness', 0, 1, 0.6, (v)=>{mat.metalness = v})
-        gui('card toughness', 0, 1, 0.4, (v)=>{mat.roughness = v})
-        function spawnItem() {
-            const body = world.add({
-                size:[9 * scale, 0.7 * scale, 5 * scale],
-                pos:[10 * scale,11 * scale ,0],
-                move:true,
-                ...phys_params
-            });
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry( 9 * scale, 0.01 * scale, 5 * scale ), mat);
-            mesh.body = body
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            scene.add(mesh);
-            bodies.push(body);
-            meshes.push(mesh);
-            return mesh
-        }
-
-        function onMouseDown( event ) {
-            const intersects = raycaster.intersectObjects(scene.children);
-            if (!intersects.length) return;
-            dragee = intersects[0].object;
-            let from_ground = true
-            if (dragee === picker) {
-                dragee = spawnItem()
-                from_ground = false
-            }
-            if (dragee.body) {
-                if (from_ground){
-                    dragee.body.position.add(raycaster.ray.direction.clone().multiplyScalar(-5 * scale));
-                }
-                plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(plane.normal), dragee.body.position);
-                if (raycaster.ray.intersectPlane(plane, intersection)) {
-                    offset.copy(intersection).sub(dragee.body.position);
-                }
-            }
-        }
-
-        function onMouseUp (event) {
-            if (dragee && dragee.body) {
-                dragee.body.linearVelocity.multiplyScalar(0.25)
-            }
-            dragee = null;
-        }
-
-        function onPointerMove( event ) {
-            pointer.x = ( event.clientX / window.innerWidth ) * 2 - 1;
-            pointer.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
-            raycaster.setFromCamera( pointer, camera );
-
-            // calculate pointer position in normalized device coordinates
-            // (-1 to +1) for both components
-
-        }
-
-        window.addEventListener('mousedown', onMouseDown);
-        window.addEventListener('mouseup', onMouseUp);
-        window.addEventListener('pointermove', onPointerMove);
-        loop()
     </script>
 </body>
 </html>
